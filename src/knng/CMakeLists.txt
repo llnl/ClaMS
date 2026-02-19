@@ -1,0 +1,12 @@
+# Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
+# Project Developers. See the top-level COPYRIGHT file for details.
+
+
+add_basic_executable(build_knng build_knng.cpp)
+setup_saltatlas_target(build_knng)
+
+add_basic_executable(build_knng_neo build_knng_neo.cpp)
+setup_saltatlas_target(build_knng_neo)
+
+add_basic_executable(serialize_pm_knng serialize_pm_knng.cpp)
+setup_saltatlas_target(serialize_pm_knng)
