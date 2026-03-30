@@ -308,6 +308,12 @@ void condense_cluster_tree(
       parent_cluster.children[1]   = right_cluster_id;
       parent_cluster.split_edge_id = edge_id;
 
+      // Update the stability of the parent cluster
+      // from all of the points in the two child clusters falling out
+      parent_cluster.stability +=
+          (lambda_p - cal_lambda(parent_cluster.birth_distance)) *
+          (left_cluster_size + right_cluster_size);
+
       work_que.emplace_back(cc_bridge.left_longest_edge_id, left_cluster_id);
       work_que.emplace_back(cc_bridge.right_longest_edge_id, right_cluster_id);
     } else if (left_cluster_size < opt.min_cluster_size &&
