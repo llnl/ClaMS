@@ -85,7 +85,6 @@ int main(int argc, char **argv) {
 
       ygm::utility::timer                  dnnd_knng_const_timer;
       static clams::dnnd_t::knn_index_type dnnd_init_knng;
-      // static std::unordered_map<id_t, std::vector<id_t>> dnnd_init_knng;
       {
         dnnd_init_knng.reserve(neo_knng.size());
         for (const auto &pair : neo_knng) {
