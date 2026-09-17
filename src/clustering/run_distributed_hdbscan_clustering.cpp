@@ -1195,7 +1195,7 @@ int main(int argc, char *argv[]) {
       spdlog::warn("Unable to open label file: {}", label_file_path.string());
     }
 
-    label_ofs << "point_id\tcluster_id\n";
+    label_ofs << "# point_id\tcluster_id\n";
     for (const auto &[point_id, cluster_id] : point_to_cluster_id_map) {
       label_ofs << point_id << "\t" << cluster_id << "\n";
     }
