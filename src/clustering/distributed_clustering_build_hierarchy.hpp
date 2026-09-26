@@ -710,10 +710,11 @@ supernode_t fill_missing_root_chain_cluster_info(
                    full_root_chain_cluster_array_ptr) {
               // Calculate num points added and sum lambda edges added for this
               // cluster
-              id_t       num_points_added       = edges.size() - 1;
-              distance_t sum_lambda_edges_added = 0.0;
+              id_t       num_points_added = edges.size() - 1;
+              distance_t sum_lambda_edges_added_including_min_edge = 0.0;
               for (auto &edge : edges) {
-                sum_lambda_edges_added += lambda_from_dist(edge.second);
+                sum_lambda_edges_added_including_min_edge +=
+                    lambda_from_dist(edge.second);
               }
 
               // Set the values in the cluster array
@@ -722,12 +723,14 @@ supernode_t fill_missing_root_chain_cluster_info(
                   [](const id_t                               &index,
                      std::pair<id_t, root_chain_cluster_info> &value,
                      const id_t                               &num_points_added,
-                     const distance_t &sum_lambda_edges_added) {
+                     const distance_t
+                         &sum_lambda_edges_added_including_min_edge) {
                     value.second.num_points_added = num_points_added;
                     value.second.sum_lambda_edges_added =
-                        sum_lambda_edges_added;
+                        sum_lambda_edges_added_including_min_edge -
+                        value.second.lambda_min_edge;
                   },
-                  num_points_added, sum_lambda_edges_added);
+                  num_points_added, sum_lambda_edges_added_including_min_edge);
             };
 
         root_chain_cluster_edges_map.async_visit(
