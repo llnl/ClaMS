@@ -453,12 +453,16 @@ struct root_chain_cluster_info {
 // overload operator<< for root-chain cluster info
 std::ostream &operator<<(std::ostream                  &os,
                          const root_chain_cluster_info &cluster) {
-  os << "stability = " << cluster.stability
-     << ", stability traversing up = " << cluster.stability_traversing_up
+  os << "stability = " << std::format("{:.10g}", cluster.stability)
+     << ", stability traversing up = "
+     << std::format("{:.9g}", cluster.stability_traversing_up)
      << ", size = " << cluster.size << ", selected = " << cluster.selected
      << ", num_points_added = " << cluster.num_points_added
-     << ", sum_lambda_edges_added = " << cluster.sum_lambda_edges_added
-     << ", lambda birth = " << cluster.lambda_birth
+     << ", sum_lambda_edges_added = "
+     << std::format("{:.10g}", cluster.sum_lambda_edges_added)
+     << ", lambda min edge = "
+     << std::format("{:.10g}", cluster.lambda_min_edge)
+     << ", lambda birth = " << std::format("{:.10g}", cluster.lambda_birth)
      << ", parent edge id = " << cluster.parent_edge_id
      << ", non-chain child: " << cluster.child << " with size "
      << cluster.child_size;
