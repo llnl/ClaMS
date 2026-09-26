@@ -306,7 +306,7 @@ int main(int argc, char *argv[]) {
   // and edge contraction map with edge_contraction_info
   ygm::container::array<std::pair<id_t, id_t>> edge_endpoints_array(
       world, total_num_edges_read);
-  ygm::container::array<edge_contraction_info> edge_contraction_map(
+  ygm::container::array<edge_contraction_info> edge_contraction_array(
       world, total_num_edges_read);
 
   {
@@ -316,7 +316,8 @@ int main(int argc, char *argv[]) {
       std::vector<std::string> input_paths{opt.mst_edges_path.c_str()};
       ygm::io::line_parser     mst_line_parser(world, input_paths);
 
-      auto line_parser_lambda = [&edge_endpoints_array, &edge_contraction_map](
+      auto line_parser_lambda = [&edge_endpoints_array,
+                                 &edge_contraction_array](
                                     const std::string &line) {
         if (std::isdigit(line[0])) {
           try {
@@ -328,7 +329,7 @@ int main(int argc, char *argv[]) {
             ++local_num_edges_read;
             std::pair<id_t, id_t> edge_endpoints = std::make_pair(node1, node2);
             edge_endpoints_array.async_insert(edge_id, edge_endpoints);
-            edge_contraction_map.async_insert(
+            edge_contraction_array.async_insert(
                 edge_id,
                 edge_contraction_info{.endpoint_supernode_reps = edge_endpoints,
                                       .distance                = dist});
@@ -349,7 +350,7 @@ int main(int argc, char *argv[]) {
     // Sort the MST edges and add them to our edge arrays
     else {
       sort_and_process_mst_edges_into_maps(
-          mst_edge_vector, edge_endpoints_array, edge_contraction_map);
+          mst_edge_vector, edge_endpoints_array, edge_contraction_array);
     }
 
     if ((world.rank() == 0) & (opt.verbose)) {
@@ -422,12 +423,12 @@ int main(int argc, char *argv[]) {
 
       // Find all edges to contract and add to disjoint set
       sw_step.reset();
-      contract_edges(round, min_incident_edge_map, edge_contraction_map,
+      contract_edges(round, min_incident_edge_map, edge_contraction_array,
                      alpha_edge_map_ptr, tree_components_djset);
 
       // Count how many edges were contracted this round
       id_t num_edges_contracted = 0;
-      edge_contraction_map.for_all(
+      edge_contraction_array.for_all(
           [&num_edges_contracted]([[maybe_unused]] const id_t &edge_id,
                                   const edge_contraction_info  edge_info) {
             if (edge_info.contraction_round == round) {
@@ -445,9 +446,9 @@ int main(int argc, char *argv[]) {
         if (min_incident_edge_map.size() <=
             LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
           update_edge_chain_parent_edge_id_from_local_map(
-              round, edge_contraction_map, min_incident_edge_map);
+              round, edge_contraction_array, min_incident_edge_map);
         } else {
-          update_edge_chain_parent_edge_id(round, edge_contraction_map,
+          update_edge_chain_parent_edge_id(round, edge_contraction_array,
                                            min_incident_edge_map);
         }
       }
@@ -507,12 +508,12 @@ int main(int argc, char *argv[]) {
       if (tree_components_djset.num_sets() <=
           LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
         update_edge_endpoints_and_chain_supernode_from_local_map(
-            round, edge_contraction_map, tree_components_djset);
+            round, edge_contraction_array, tree_components_djset);
       }
       // Otherwise, avoid creating local copies and look up new edge info in
       // the supernode_map
       else {
-        update_edge_endpoints_and_chain_supernode(round, edge_contraction_map,
+        update_edge_endpoints_and_chain_supernode(round, edge_contraction_array,
                                                   tree_components_djset);
       }
       reinit_min_incident_edge_map(min_incident_edge_map,
@@ -524,7 +525,8 @@ int main(int argc, char *argv[]) {
       sw_step.reset();
 
       // Update the incidence map
-      update_min_incident_edge_map(edge_contraction_map, min_incident_edge_map);
+      update_min_incident_edge_map(edge_contraction_array,
+                                   min_incident_edge_map);
       incidence_map_time += sw_step.elapsed().count();
 
       ++round;
@@ -604,7 +606,7 @@ int main(int argc, char *argv[]) {
     sw_step.reset();
 
     // Fill in the missing alpha edge info
-    fill_alpha_edge_map(alpha_edge_map, edge_contraction_map,
+    fill_alpha_edge_map(alpha_edge_map, edge_contraction_array,
                         root_chain_supernode);
 
     // Assign edges to chains
@@ -614,12 +616,12 @@ int main(int argc, char *argv[]) {
       }
 
       assign_edges_to_chains(
-          edge_contraction_map, chain_map, local_root_chain_alpha_edges,
+          edge_contraction_array, chain_map, local_root_chain_alpha_edges,
           root_chain_non_alpha_edge_set, leaf_cluster_map, final_round);
 
       assign_edges_to_chains_time += sw_step.elapsed().count();
 
-      edge_contraction_map.clear();
+      edge_contraction_array.clear();
       world.barrier();
 
       if (opt.verbose) {
