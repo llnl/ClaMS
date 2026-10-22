@@ -5,8 +5,11 @@
 #include <utility>
 #include <vector>
 
-#include <boost/unordered/unordered_flat_map.hpp>
 #include <cereal/types/array.hpp>
+
+#include <metall/container/vector.hpp>
+#include <metall/metall.hpp>
+#include <metall/utility/metall_mpi_adaptor.hpp>
 
 #include <ygm/comm.hpp>
 #include <ygm/container/array.hpp>
@@ -18,19 +21,12 @@
 
 #include "distributed_clustering_types.hpp"
 
-#include <metall/container/unordered_flat_map.hpp>
-#include <metall/metall.hpp>
-#include <metall/utility/metall_mpi_adaptor.hpp>
-
 namespace clams::clustering {
 
-// Cluster ID table that can be stored in a Metall datastore.
-// This table also can be used as a regular in-memory table thanks to the
-// scoped_fallback_allocator_type.
-using pm_cluster_id_table_t = metall::container::unordered_flat_map<
-    id_t, id_t, std::hash<id_t>, std::equal_to<id_t>,
-    metall::manager::scoped_fallback_allocator_type<
-        std::pair<const id_t, id_t>>>;
+// Type for writing cluster labels to metal file as a vector of (point id,
+// cluster label) pairs
+using pm_point_to_cluster_id_t =
+    metall::container::vector<std::pair<id_t, cluster_id_t>>;
 
 /**
  * @brief Calculate cluster size, stability, and stability traversing up
@@ -1970,23 +1966,33 @@ void assign_points_cluster_ids(
     root_chain_cluster_map.for_all(label_root_chain_cluster_lambda);
 
     // Also handle labeling the second root chain child
-    if (root_chain_second_child_name.second == 1) {
-      leaf_cluster_map.async_visit(root_chain_second_child_name,
-                                   label_leaf_cluster_edge_endpoints_lambda,
-                                   selected_root_chain_cluster_id,
-                                   edge_endpoints_array_ptr,
-                                   point_to_cluster_id_map_ptr);
-    } else {
-      chain_map.async_visit(
-          root_chain_second_child_name, label_points_functor(),
-          std::numeric_limits<id_t>::max(), selected_root_chain_cluster_id,
-          leaf_cluster_map_ptr, edge_endpoints_array_ptr,
-          point_to_cluster_id_map_ptr);
+    if (comm.rank() == 0) {
+      if (root_chain_second_child_name.second == 1) {
+        leaf_cluster_map.async_visit(root_chain_second_child_name,
+                                     label_leaf_cluster_edge_endpoints_lambda,
+                                     selected_root_chain_cluster_id,
+                                     edge_endpoints_array_ptr,
+                                     point_to_cluster_id_map_ptr);
+      } else {
+        chain_map.async_visit(
+            root_chain_second_child_name, label_points_functor(),
+            std::numeric_limits<id_t>::max(), selected_root_chain_cluster_id,
+            leaf_cluster_map_ptr, edge_endpoints_array_ptr,
+            point_to_cluster_id_map_ptr);
+      }
     }
   }
   comm.barrier();
 }
 
+/**
+ * @brief Writes cluster labels to text files, writing one file per rank.
+ * Files are in the form point_id \t cluster_label in each row.
+ *
+ * @param point_to_cluster_id_map YGM map of point id -> cluster label.
+ * @param output_path File to write cluster data to. Each rank must
+ * receive its own file name (e.g., path_to_cluster_labels/rank.txt).
+ */
 void write_cluster_labels_one_txt_file_per_rank(
     ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
     std::filesystem::path                    output_path) {
@@ -2016,9 +2022,16 @@ void write_cluster_labels_one_txt_file_per_rank(
   comm.barrier();
 }
 
+/**
+ * @brief Writes cluster labels a single-rank Metall datastore. Labels
+ * are saved as a vector of pairs (point_id, cluster_label).
+ *
+ * @param point_to_cluster_id_map YGM map of point id -> cluster label.
+ * @param output_path Path (as a string) to output Metall datastore.
+ */
 void write_cluster_labels_single_pm(
     ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
-    const std::string                       &output_filename) {
+    const std::string                       &output_path) {
   ygm::comm &comm = point_to_cluster_id_map.comm();
 
   // Get local point ids and cluster labels
@@ -2035,17 +2048,19 @@ void write_cluster_labels_single_pm(
   const size_t num_points = point_to_cluster_id_map.size();
 
   MPI_Comm mpi_comm = comm.get_mpi_comm();
+
   if (comm.rank() == 0) {
-    metall::manager manager(metall::create_only, output_filename);
-    auto            cluster_id_table = manager.construct<pm_cluster_id_table_t>(
+    metall::manager manager(metall::create_only, output_path);
+    auto cluster_id_table = manager.construct<pm_point_to_cluster_id_t>(
         metall::unique_instance)(manager.get_allocator());
     cluster_id_table->reserve(num_points);
 
     // Write own edges
     for (size_t i = 0; i < point_ids.size(); ++i) {
-      cluster_id_table->emplace(point_ids.at(i), cluster_labels.at(i));
+      // cluster_id_table->emplace(point_ids.at(i), cluster_labels.at(i));
+      cluster_id_table->emplace_back(
+          std::make_pair(point_ids.at(i), cluster_labels.at(i)));
     }
-    std::cout << "Wrote labels from rank 0" << std::endl;
 
     // Write edges for all other ranks
     for (int r = 1; r < comm.size(); ++r) {
@@ -2054,9 +2069,9 @@ void write_cluster_labels_single_pm(
       std::vector<cluster_id_t> remote_labels =
           comm.mpi_recv<std::vector<cluster_id_t>>(r, 1, mpi_comm);
       for (size_t i = 0; i < remote_ids.size(); ++i) {
-        cluster_id_table->emplace(remote_ids.at(i), remote_labels.at(i));
+        cluster_id_table->emplace_back(
+            std::make_pair(remote_ids.at(i), remote_labels.at(i)));
       }
-      std::cout << "Wrote labels from rank " << r << std::endl;
     }
 
   } else {
