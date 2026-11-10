@@ -38,6 +38,7 @@ import argparse
 from script.data_readers import read_cluster_labels
 from script.benchmark.clustering_utilities import eval_clusters
 
+
 def parse_options():
     parser = argparse.ArgumentParser(
         description='Evaluate clustering quality')
