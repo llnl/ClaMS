@@ -24,6 +24,7 @@
 #include <spdlog/stopwatch.h>
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/unordered/unordered_flat_set.hpp>
+#include <metall/utility/metall_mpi_datastore.hpp>
 
 #include "../common.hpp"
 #include "../details/multithread_adjacency_list.hpp"
@@ -45,12 +46,15 @@ void show_help() {
   std::cout
       << "<<Usage>>\n"
          "Required arguments:\n"
-         "  -m <path> path to a file or a directory that contains input MST.\n"
+         "  -m <path> path to a single file or a directory that contains input "
+         "MST.\n"
          "  -c <path> path to input cluster IDs.\n"
          "  -o <path> path to output cluster IDs.\n"
          "Optional arguments:\n"
-         "  -M If specified, the MST input is a Metall datastore.\n"
-         "  -C If specified, the cluster IDs input is a Metall datastore.\n"
+         "  -M If specified, the MST input is either a single Metall datastore "
+         "or a Metall MPI datastore.\n"
+         "  -C If specified, the cluster IDs input is either a single Metall "
+         "datastore or a Metall MPI datastore.\n"
          "  -h Show help."
       << std::endl;
 }
@@ -84,30 +88,108 @@ void parse_option(int argc, char* argv[], option& opt) {
   }
 }
 
+/// Get the partition size of a Metall MPI datastore.
+/// Returns 0 if the partition size file does not exist.
+/// TODO: implement helper functions on Metall side
+int get_pm_datastore_partition_size(
+    const std::filesystem::path& datastore_path) {
+  const std::filesystem::path mpi_partition_size_file =
+      datastore_path / "metall_mpi_adaptor_partition_size";
+  if (std::filesystem::exists(mpi_partition_size_file)) {
+    std::ifstream ifs(mpi_partition_size_file);
+    int           partition_size;
+    ifs >> partition_size;
+    return partition_size;
+  }
+  return 0;
+}
+
+using mst_graph_t =
+    multithread_adjacency_list<id_t, std::pair<id_t, distance_t>>;
+
+void read_single_metall_edges(const std::filesystem::path& mst_edges_path,
+                              mst_graph_t&                 mst_graph) {
+  metall::manager metall_manager(metall::open_read_only, mst_edges_path);
+  auto*           input_mst_edges =
+      metall_manager.find<weighted_edge_list_t>(metall::unique_instance).first;
+  if (!input_mst_edges) {
+    spdlog::critical("Failed to find MST edges in Metall datastore at {}",
+                     mst_edges_path.string());
+    std::abort();
+  }
+
+  spdlog::trace("#of MST edges from path {} is {}", mst_edges_path.string(),
+                input_mst_edges->size());
+
+  OMP_DIRECTIVE(parallel for)
+  for (size_t ei = 0; ei < input_mst_edges->size(); ++ei) {
+    const auto& edge = input_mst_edges->at(ei);
+    mst_graph.add(edge.ids[0], {edge.ids[1], edge.distance});
+    mst_graph.add(edge.ids[1], {edge.ids[0], edge.distance});
+  }
+}
+
+void read_mst_metall_edges(const std::filesystem::path& mst_edges_path,
+                           mst_graph_t&                 mst_graph) {
+  const int n_partitions = get_pm_datastore_partition_size(mst_edges_path);
+  if (n_partitions > 0) {
+    for (int i = 0; i < n_partitions; ++i) {
+      const auto path = metall::utility::mpi_datastore::make_local_dir_path(
+          mst_edges_path.string(), i);
+      read_single_metall_edges(path, mst_graph);
+    }
+  } else {
+    read_single_metall_edges(mst_edges_path, mst_graph);
+  }
+}
+
+void read_single_metall_cluster_ids(
+    const std::filesystem::path& cluster_ids_path, bool mpi_partition,
+    pm_point_to_cluster_id_map_t& point_cluster_map) {
+  metall::manager metall_manager(metall::open_read_only, cluster_ids_path);
+  const auto*     input_cluster_id_list =
+      mpi_partition
+              ? metall_manager
+                .find<pm_point_to_cluster_id_list_t>(metall::unique_instance)
+                .first
+              : metall_manager
+                .find<pm_point_to_cluster_id_list_t>("point_to_cluster_id_list")
+                .first;
+  if (!input_cluster_id_list) {
+    spdlog::critical("Failed to find cluster IDs in Metall datastore at {}",
+                     cluster_ids_path.string());
+    std::abort();
+  }
+
+  // The datastore closes at the end of this scope, so copy its entries.
+  point_cluster_map.reserve(point_cluster_map.size() +
+                            input_cluster_id_list->size());
+  point_cluster_map.insert(input_cluster_id_list->begin(),
+                           input_cluster_id_list->end());
+}
+
+void read_metall_cluster_ids(const std::filesystem::path&  cluster_ids_path,
+                             pm_point_to_cluster_id_map_t& point_cluster_map) {
+  const int n_partitions = get_pm_datastore_partition_size(cluster_ids_path);
+  if (n_partitions > 0) {
+    for (int i = 0; i < n_partitions; ++i) {
+      const auto path = metall::utility::mpi_datastore::make_local_dir_path(
+          cluster_ids_path.string(), i);
+      read_single_metall_cluster_ids(path, true, point_cluster_map);
+    }
+  } else {
+    read_single_metall_cluster_ids(cluster_ids_path, false, point_cluster_map);
+  }
+}
+
 int main(int argc, char* argv[]) {
   option opt;
   parse_option(argc, argv, opt);
 
-  multithread_adjacency_list<id_t, std::pair<id_t, distance_t>> mst_graph;
+  mst_graph_t mst_graph;
   if (opt.metall_mst) {
     spdlog::info("Attaching MST in Metall datastore");
-    metall::manager metall_manager(metall::open_read_only, opt.mst_edges_path);
-    auto*           input_mst_edges =
-        metall_manager.find<weighted_edge_list_t>(metall::unique_instance)
-            .first;
-    if (!input_mst_edges) {
-      spdlog::critical("Failed to find MST edges in Metall datastore at {}",
-                       opt.mst_edges_path.string());
-      std::abort();
-    }
-    spdlog::info("#of MST edges: {}", input_mst_edges->size());
-    spdlog::info("Copying MST edges from Metall datastore");
-    OMP_DIRECTIVE(parallel for)
-    for (size_t i = 0; i < input_mst_edges->size(); ++i) {
-      const auto& edge = input_mst_edges->at(i);
-      mst_graph.add(edge.ids[0], {edge.ids[1], edge.distance});
-      mst_graph.add(edge.ids[1], {edge.ids[0], edge.distance});
-    }
+    read_mst_metall_edges(opt.mst_edges_path, mst_graph);
   } else {
     spdlog::info("Reading MST edges");
     weighted_edge_list_t input_mst_edges;
@@ -130,22 +212,7 @@ int main(int argc, char* argv[]) {
   pm_point_to_cluster_id_map_t point_cluster_map;
   if (opt.metall_cluster_ids) {
     spdlog::info("Attaching cluster IDs in Metall datastore");
-    metall::manager metall_manager(metall::open_read_only,
-                                   opt.cluster_ids_input_path);
-    const auto*     input_cluster_id_list =
-        metall_manager
-            .find<pm_point_to_cluster_id_list_t>("point_to_cluster_id_list")
-            .first;
-    if (!input_cluster_id_list) {
-      spdlog::critical("Failed to find cluster IDs in Metall datastore at {}",
-                       opt.cluster_ids_input_path.string());
-      std::abort();
-    }
-    // The datastore is read-only and closes at the end of this scope, so keep
-    // a heap-backed copy for the assignments made below.
-    point_cluster_map.reserve(input_cluster_id_list->size());
-    point_cluster_map.insert(input_cluster_id_list->begin(),
-                             input_cluster_id_list->end());
+    read_metall_cluster_ids(opt.cluster_ids_input_path, point_cluster_map);
   } else {
     read_cluster_ids(clams::find_files(opt.cluster_ids_input_path),
                      point_cluster_map);
