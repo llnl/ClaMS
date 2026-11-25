@@ -96,6 +96,9 @@ def parse_options():
     parser.add_argument('-s', '--min_samples', type=int, default=-1,
                         dest='min_samples',
                         help='min_sample value for calculating core distance. If -1 is given, core distance is not calculated.')
+    # Dump detailed clustering results
+    parser.add_argument('--dump_detailed_clustering_results', action='store_true',
+                        help='Enable dumping of detailed clustering results.')
 
     # For evaluation
     parser.add_argument('-g', '--ground_truth_path',
@@ -233,7 +236,7 @@ def add_clustering_evaluation(job_script, cluster_label_dir, amst_ds_path,
         add_cmd(evaluation_command, job_script)
 
 
-def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
+def run_clustering(job_script, set_cmd, dump_detailed_clustering_results, work_dir, amst_approx_bound,
                    amst_ds_path, clustering_exe,
                    evaluator, ygm_cluster_eval, mpi_sizes,
                    verbose, ground_truth_path,
@@ -252,8 +255,9 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
     hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
                               f" -m ${{MIN_CLUSTER_SIZE}} "
                               f" -o {cluster_label_dir} "
-                              f" -c {cluster_tree_dir} "
-                              f" -s -d")
+                              f" -d")
+    if dump_detailed_clustering_results:
+        hpc_clustering_command += f" -c {cluster_tree_dir} "
     add_srun_cmd(*mpi_sizes['clustering'], hpc_clustering_command, job_script)
     finish_stage(job_script)
 
@@ -318,6 +322,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                            singleton_cluster_to_noise_points,
                            min_cluster_size_set_cmnds,
                            min_samples,
+                           dump_detailed_clustering_results,
                            noise_point_clustering_exe,
                            cluster_noise_points,
                            serialize_pm_cluster_data_exe,
@@ -342,7 +347,8 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                             allocation_tasks_per_node)
         add_cmd(f'cd {shlex.quote(os.getcwd())}', job_script)
         job_script.write(f"echo \"Allocated nodes: {allocation_nodes}\"\n")
-        job_script.write(f"echo \"Allocated tasks per node: {allocation_tasks_per_node}\"\n")
+        job_script.write(
+            f"echo \"Allocated tasks per node: {allocation_tasks_per_node}\"\n")
 
         add_cmd(f'mkdir -p {work_dir}', job_script, True, False)
 
@@ -360,7 +366,8 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                 dnnd_ds_path_backup = f"{dnnd_ds_path}_backup"
                 job_script.write(f"echo \"Backing up KNNG datastore\"\n")
                 backup_knng_command = f"{pm_datastore_copy_exe} -s {dnnd_ds_path} -t {dnnd_ds_path_backup}"
-                add_srun_cmd(*mpi_sizes['dnnd'], backup_knng_command, job_script)
+                add_srun_cmd(*mpi_sizes['dnnd'],
+                             backup_knng_command, job_script)
         else:
             job_script.write(
                 f"Using existing DNND datastore at {input_dnnd_ds_path}\n")
@@ -400,7 +407,8 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             # Run the HPC Clustering step
             for set_cmd in min_cluster_size_set_cmnds:
                 run_clustering(
-                    job_script, set_cmd, work_dir, amst_approx_bound,
+                    job_script, set_cmd, dump_detailed_clustering_results,
+                    work_dir, amst_approx_bound,
                     amst_ds_path, clustering_exe,
                     evaluator, ygm_cluster_eval, mpi_sizes, verbose,
                     ground_truth_path, singleton_cluster_to_noise_points,
@@ -489,6 +497,7 @@ def main():
                                         opts.dummy_cluster_id,
                                         min_cluster_size_set_cmnds,
                                         opts.min_samples,
+                                        opts.dump_detailed_clustering_results,
                                         opts.noise_point_clustering_exe,
                                         opts.cluster_noise_points,
                                         opts.serialize_pm_cluster_data_exe,
