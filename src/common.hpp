@@ -24,7 +24,8 @@
 
 namespace clams {
 
-static constexpr id_t k_noise_cluster_id = static_cast<id_t>(-1);
+static constexpr cluster_id_t k_noise_cluster_id =
+    static_cast<cluster_id_t>(-1);
 
 inline std::vector<std::filesystem::path> find_files(
     const std::filesystem::path &path) {

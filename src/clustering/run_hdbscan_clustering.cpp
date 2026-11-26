@@ -195,16 +195,18 @@ void build_cluster_hierarchy(const weighted_edge_list_t& mst_edges,
 }
 
 struct cluster_data {
-  static constexpr id_t k_invalid_cluster_id = std::numeric_limits<id_t>::max();
+  static constexpr cluster_id_t k_invalid_cluster_id =
+      std::numeric_limits<cluster_id_t>::max();
 
   bool leaf() const { return children[0] == k_invalid_cluster_id; }
 
-  distance_t          birth_distance{0.0};
-  double              stability{0.0};
-  std::array<id_t, 2> children = {k_invalid_cluster_id, k_invalid_cluster_id};
-  bool                selected{false};
-  id_t                final_cluster_id{k_invalid_cluster_id};
-  size_t              size{0};
+  distance_t                  birth_distance{0.0};
+  double                      stability{0.0};
+  std::array<cluster_id_t, 2> children = {k_invalid_cluster_id,
+                                          k_invalid_cluster_id};
+  bool                        selected{false};
+  cluster_id_t                final_cluster_id{k_invalid_cluster_id};
+  size_t                      size{0};
   // The ID of the edge that split this cluster into two subclusters.
   id_t split_edge_id{std::numeric_limits<id_t>::max()};
 };
@@ -218,8 +220,8 @@ std::ostream& operator<<(std::ostream& ofs, const cluster_data& cluster) {
 }
 
 struct point_cluster_data {
-  id_t   cluster_id;
-  double lambda_p;
+  cluster_id_t cluster_id;
+  double       lambda_p;
 };
 
 // double cal_lambda(const distance_t distance) { return (1.0f / distance); }
@@ -238,7 +240,7 @@ double cal_lambda(const distance_t distance) {
 // connects.
 void assign_cluster_to_points(
     const id_t root_edge_id, const weighted_edge_list_t& mst_edges,
-    const std::vector<bridge_edge>& bridge_edges, const id_t cluster_id,
+    const std::vector<bridge_edge>& bridge_edges, const cluster_id_t cluster_id,
     const double lambda_p, map_t<id_t, point_cluster_data>& point_cluster_map) {
   std::stack<id_t> stack;
   stack.push(root_edge_id);
@@ -278,7 +280,7 @@ void condense_cluster_tree(
   clusters.at(0).birth_distance = std::numeric_limits<distance_t>::max();
 
   // Edge ID and the cluster ID that the edge belongs to.
-  std::deque<std::pair<id_t, id_t> > work_que;
+  std::deque<std::pair<id_t, cluster_id_t>> work_que;
   // All edges (points) belong to the dummy root cluster '0'.
   work_que.emplace_back(mst_edges.size() - 1, 0);
   // remove from the longest edge
@@ -286,7 +288,8 @@ void condense_cluster_tree(
     const auto edge_id = work_que.front().first;
     assert(edge_id < mst_edges.size());
     const auto cluster_id = work_que.front().second;
-    assert(cluster_id < clusters.size());
+    assert(cluster_id >= 0 &&
+           static_cast<std::size_t>(cluster_id) < clusters.size());
     work_que.pop_front();
     const auto& edge               = mst_edges[edge_id];
     const auto& left_pid           = edge.ids[0];
@@ -302,10 +305,10 @@ void condense_cluster_tree(
       // New clusters have been born
       clusters.emplace_back(cluster_data{.birth_distance = distance});
       clusters.emplace_back(cluster_data{.birth_distance = distance});
-      const id_t left_cluster_id         = clusters.size() - 2;
-      const id_t right_cluster_id        = clusters.size() - 1;
-      clusters.at(left_cluster_id).size  = left_cluster_size;
-      clusters.at(right_cluster_id).size = right_cluster_size;
+      const cluster_id_t left_cluster_id  = clusters.size() - 2;
+      const cluster_id_t right_cluster_id = clusters.size() - 1;
+      clusters.at(left_cluster_id).size   = left_cluster_size;
+      clusters.at(right_cluster_id).size  = right_cluster_size;
 
       point_cluster_id_map[left_pid]  = {.cluster_id = left_cluster_id,
                                          .lambda_p   = lambda_p};
@@ -378,10 +381,10 @@ void condense_cluster_tree(
 // Recursively annex all descendant clusters to the new cluster.
 // Specifically, deselect all descendant clusters and set their
 // final_cluster_id to the new cluster ID.
-void annex_descendant_clusters(const std::size_t          id,
-                               const std::size_t          new_cluster_id,
+void annex_descendant_clusters(const cluster_id_t         id,
+                               const cluster_id_t         new_cluster_id,
                                std::vector<cluster_data>& clusters) {
-  assert(id < clusters.size());
+  assert(id >= 0 && static_cast<std::size_t>(id) < clusters.size());
   auto& cluster            = clusters.at(id);
   cluster.selected         = false;
   cluster.final_cluster_id = new_cluster_id;
@@ -392,9 +395,9 @@ void annex_descendant_clusters(const std::size_t          id,
   annex_descendant_clusters(cluster.children[1], new_cluster_id, clusters);
 }
 
-double extract_clusters_helper(const std::size_t          id,
+double extract_clusters_helper(const cluster_id_t         id,
                                std::vector<cluster_data>& clusters) {
-  assert(id < clusters.size());
+  assert(id >= 0 && static_cast<std::size_t>(id) < clusters.size());
   auto& cluster = clusters.at(id);
   if (cluster.leaf()) {
     // Leaf clusters are selected initially.
@@ -447,7 +450,7 @@ void dump_cluster_ids(const id_t                             max_point_id,
   }
   spdlog::info("Output cluster IDs to {}", output_path.string());
 
-  map_t<std::size_t, std::size_t> new_ids;
+  map_t<cluster_id_t, cluster_id_t> new_ids;
   // '#' is used for comments.
   ofs << "# Point ID\tCluster ID";
   if (dump_lambda_p) {
@@ -460,7 +463,8 @@ void dump_cluster_ids(const id_t                             max_point_id,
     }
 
     const auto initial_cluster_id = point_cluster_map.at(i).cluster_id;
-    assert(initial_cluster_id < clusters.size());
+    assert(initial_cluster_id >= 0 &&
+           static_cast<std::size_t>(initial_cluster_id) < clusters.size());
     const auto& cluster          = clusters.at(initial_cluster_id);
     const auto& final_cluster_id = cluster.final_cluster_id;
 
@@ -476,8 +480,8 @@ void dump_cluster_ids(const id_t                             max_point_id,
         final_cluster_id != cluster_data::k_invalid_cluster_id) {
       if (renumber_cluster_ids) {
         if (new_ids.count(cluster.final_cluster_id) == 0) {
-          const auto new_cluster_id = new_ids.size();
-          new_ids[final_cluster_id] = new_cluster_id;
+          const cluster_id_t new_cluster_id = new_ids.size();
+          new_ids[final_cluster_id]         = new_cluster_id;
         }
         ofs << i << "\t" << new_ids.at(final_cluster_id);
       } else {
@@ -511,9 +515,10 @@ void dump_cluster_data(const std::vector<cluster_data>& clusters,
          "Children[1], "
          "Selected, Final Cluster ID, Split Edge ID"
       << std::endl;
-  for (std::size_t cid = 0; cid < clusters.size(); ++cid) {
-    const auto& cluster = clusters.at(cid);
-    ofs << cid << ", " << cluster << std::endl;
+  for (std::size_t index = 0; index < clusters.size(); ++index) {
+    const auto&        cluster    = clusters.at(index);
+    const cluster_id_t cluster_id = index;
+    ofs << cluster_id << ", " << cluster << std::endl;
   }
 }
 
@@ -556,6 +561,18 @@ int main(int argc, char* argv[]) {
     max_point_id = std::max(max_point_id, edge.ids[1]);
   }
   spdlog::info("Max point ID: {}", max_point_id);
+  // Check if max_point_id is less than the max cluster ID the cluster_id_t can
+  // represent.
+  // -1 is subtracted because the max cluster ID is reserved for invalid cluster
+  // ID.
+  if (max_point_id >
+      static_cast<id_t>(std::numeric_limits<cluster_id_t>::max()) - 1) {
+    spdlog::critical(
+        "Max point ID {} exceeds the maximum cluster ID that cluster_id_t can "
+        "represent",
+        max_point_id);
+    std::abort();
+  }
 
   spdlog::info("Start clustering");
   spdlog::stopwatch sw_clustering;
@@ -603,7 +620,8 @@ int main(int argc, char* argv[]) {
   std::size_t num_points_in_clusters = 0;
   for (const auto& pcdata : point_cluster_id_map) {
     const auto initial_cluster_id = pcdata.second.cluster_id;
-    assert(initial_cluster_id < clusters.size());
+    assert(initial_cluster_id >= 0 &&
+           static_cast<std::size_t>(initial_cluster_id) < clusters.size());
     const auto& cluster          = clusters.at(initial_cluster_id);
     const auto& final_cluster_id = cluster.final_cluster_id;
     if (initial_cluster_id > 0 &&
